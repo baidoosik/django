@@ -4,8 +4,8 @@ from django.core.exceptions import FieldError
 from django.db.models import BooleanField, CharField, F, Q
 from django.db.models.expressions import Col, Func
 from django.db.models.fields.related_lookups import RelatedIsNull
-from django.db.models.functions import Lower
-from django.db.models.lookups import Exact, GreaterThan, IsNull, LessThan
+from django.db.models.functions import Lower, ExtractYear
+from django.db.models.lookups import Exact, GreaterThan, IsNull, LessThan, YearExact
 from django.db.models.sql.query import Query
 from django.db.models.sql.where import OR
 from django.test import SimpleTestCase
@@ -91,6 +91,35 @@ class TestQuery(SimpleTestCase):
         self.assertIsInstance(lookup, IsNull)
         self.assertEqual(lookup.lhs.target, Item._meta.get_field('modified'))
 
+    def test_negated_annotation_nullable(self):
+        query = Query(Item.objects.annotate(year=ExtractYear('mo')).exclude(modified='2021'))
+        clause = query.build_filter(
+            ('year', '2021'),
+            branch_negated=True,
+            current_negated=True,
+            can_reuse=set()
+        )
+        lookup = clause.children[0]
+        self.assertIsInstance(lookup, YearExact)
+        self.assertEqual(lookup.lhs.target, Item._meta.get_field('modified'))
+        lookup = clause.children[1]
+        self.assertIsInstance(lookup, IsNull)
+        self.assertEqual(lookup.lhs.target, Item._meta.get_field('modified'))
+
+        query = Query(Item.objects.annotate(year=ExtractYear('mo')).exclude(modified__lt='2021'))
+        clause = query.build_filter(
+            ('year', '2021'),
+            branch_negated=True,
+            current_negated=True,
+            can_reuse=set()
+        )
+        lookup = clause.children[0]
+        self.assertIsInstance(lookup, LessThan)
+        self.assertEqual(lookup.lhs.target, Item._meta.get_field('modified'))
+        lookup = clause.children[1]
+        self.assertIsInstance(lookup, IsNull)
+        self.assertEqual(lookup.lhs.target, Item._meta.get_field('modified'))
+
     def test_foreign_key(self):
         query = Query(Item)
         msg = 'Joined field references are not permitted in this query'
@@ -163,6 +192,16 @@ class TestQuery(SimpleTestCase):
         self.assertEqual(
             Author.objects.filter(item__name='foo').query,
             Author.objects.filter(Q(item__name='foo')).query,
+        )
+
+    def test_equality_negated_nullable_with_annotation(self):
+        self.assertEqual(
+            Item.objects.exclude(created__year='2021').values('id').query,
+            Item.objects.annotate(year=ExtractYear('created')).exclude(year='2021').values('id').query
+        )
+        self.assertEqual(
+            Item.objects.exclude(modified__year='2021').values('id').query,
+            Item.objects.annotate(year=ExtractYear('modified')).exclude(year='2021').values('id').query
         )
 
     def test_hash(self):
